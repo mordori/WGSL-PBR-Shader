@@ -1,5 +1,5 @@
 {
-  "name": "pbr-shader-portfolio",
+  "name": "wgsl-pbr-shader",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -17,7 +17,6 @@
     "vite": "^8.0.1"
   },
   "dependencies": {
-    "@babylonjs/core": "^9.1.0",
     "webgpu-utils": "^2.0.3",
     "wgpu-matrix": "^3.4.2"
   }
