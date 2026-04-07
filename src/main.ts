@@ -66,9 +66,12 @@ async function initWebGPU() {
     });
 
     let time = 0;
+    let lastTime = performance.now();
 
-    function render() {
-        time += 0.01;
+    function render(now: number) {
+        const deltaTime = (now - lastTime) / 1000;
+        lastTime = now;
+        time += deltaTime;
         const aspect = canvas.width / canvas.height;
 
         const projection = mat4.perspective(Math.PI / 4, aspect, 0.1, 100.0);
