@@ -7,8 +7,14 @@ import { parseOBJ } from './parser';
 
 async function initWebGPU() {
 	const canvas = document.querySelector('#renderCanvas') as HTMLCanvasElement;
-	const adapter = await navigator.gpu?.requestAdapter();
-	const device =  await adapter?.requestDevice();
+	let adapter = await navigator.gpu?.requestAdapter();
+	if (!adapter) {
+		console.warn("Core WebGPU features not available. Enabling compatibility mode.");
+		adapter = await navigator.gpu?.requestAdapter({
+			featureLevel: 'compatibility'
+		});
+	}
+	const device = await adapter?.requestDevice();
 	if (!device || !canvas) throw new Error("WebGPU not supported!");
 
 	const context = canvas.getContext('webgpu') as GPUCanvasContext;
@@ -17,19 +23,19 @@ async function initWebGPU() {
 	const resize = () => {
 		canvas.width = window.innerWidth * window.devicePixelRatio;
 		canvas.height = window.innerHeight * window.devicePixelRatio;
-		context.configure({device, format});
+		context.configure({ device, format });
 
 		if (depthTexture) depthTexture.destroy();
 		depthTexture = device.createTexture({
-		size: [canvas.width, canvas.height],
-		format: 'depth24plus',
-		usage: GPUTextureUsage.RENDER_ATTACHMENT,
-	});
+			size: [canvas.width, canvas.height],
+			format: 'depth24plus',
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+		});
 	};
 	window.addEventListener('resize', resize);
 	resize();
 
-	const shaderModule = device.createShaderModule({code: rawShader});
+	const shaderModule = device.createShaderModule({ code: rawShader });
 	const defs = makeShaderDataDefinitions(rawShader);
 	const uniforms = makeStructuredView(defs.structs.Uniforms);
 	const uniformBuffer = device.createBuffer({
@@ -76,31 +82,46 @@ async function initWebGPU() {
 
 	const bindGroup = device.createBindGroup({
 		layout: pipeline.getBindGroupLayout(0),
-		entries: [{binding: 0, resource: {buffer: uniformBuffer}}]
+		entries: [{ binding: 0, resource: { buffer: uniformBuffer } }]
 	});
 
-	let time = 0;
+	let time = 0.0;
 	let lastTime = performance.now();
 
 	function frame(now: number) {
-		const deltaTime = (now - lastTime) / 1000;
+		const deltaTime = (now - lastTime) / 1000.0;
 		lastTime = now;
 		time += deltaTime;
 		const aspect = canvas.width / canvas.height;
 
-		const projection = mat4.perspective(Math.PI / 4, aspect, 0.1, 100.0);
-		const view = mat4.translation([ 0, 0, -5 ]);
+		const cameraPos = [0.0, 0.0, 5.0];
+		const projection = mat4.perspective(Math.PI / 4.0, aspect, 0.1, 100.0);
+		const view = mat4.lookAt(
+			cameraPos,
+			[0.0, 0.0, 0.0],
+			[0.0, 1.0, 0.0]
+		);
 		const model = mat4.rotationY(time);
 		const mvp = mat4.mul(mat4.mul(projection, view), model);
 
-		uniforms.set({ mvp, model, time });
+		const lights = [
+			{ position: [10.0, 5.0, 5.0], emission: [300.0, 300.0, 300.0] }
+		]
+
+		uniforms.set({
+			mvp,
+			model,
+			cameraPos,
+			time,
+			lights,
+		});
 		device!.queue.writeBuffer(uniformBuffer, 0, uniforms.arrayBuffer);
 
 		const commandEncoder = device!.createCommandEncoder();
 		const pass = commandEncoder.beginRenderPass({
 			colorAttachments: [{
 				view: context.getCurrentTexture().createView(),
-				clearValue: { r: 0.05, g: 0.05, b:0.05, a: 1.0 },
+				clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
 				loadOp: 'clear',
 				storeOp: 'store',
 			}],
@@ -108,7 +129,7 @@ async function initWebGPU() {
 				view: depthTexture.createView(),
 				depthClearValue: 1.0,
 				depthLoadOp: 'clear',
-				depthStoreOp:  'store',
+				depthStoreOp: 'store',
 			},
 		});
 		pass.setPipeline(pipeline);
@@ -118,7 +139,7 @@ async function initWebGPU() {
 		pass.draw(vertexCount);
 		pass.end();
 
-		device!.queue.submit([ commandEncoder.finish() ]);
+		device!.queue.submit([commandEncoder.finish()]);
 		requestAnimationFrame(frame);
 	}
 	requestAnimationFrame(frame);
