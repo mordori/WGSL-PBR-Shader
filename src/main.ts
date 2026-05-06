@@ -105,15 +105,18 @@ async function initWebGPU() {
 		const mvp = mat4.mul(mat4.mul(projection, view), model);
 
 		const lights = [
-			{ position: [10.0, 5.0, 5.0], emission: [300.0, 300.0, 300.0] }
+			{ position: [1.0, 6.0, -10.0], emission: [400.0, 400.0, 5500.0] },
+			{ position: [2.0, 4.0, 5.0], emission: [10.0, 10.0, 5000.0] },
+			{ position: [-7.0, 2.0, -8.0], emission: [250.0, 0.0, 0.0] },
 		]
 
 		uniforms.set({
+			lightCount: lights.length,
 			mvp,
 			model,
 			cameraPos,
-			time,
 			lights,
+			time,
 		});
 		device!.queue.writeBuffer(uniformBuffer, 0, uniforms.arrayBuffer);
 

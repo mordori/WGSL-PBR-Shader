@@ -1,9 +1,10 @@
 struct Uniforms {
+	lights: array<PointLight, 4>,
 	mvp: mat4x4f,
 	model: mat4x4f,
 	cameraPos: vec3f,
+	lightCount: u32,
 	time: f32,
-	lights: array<PointLight, 4>,
 };
 
 struct PointLight {
@@ -34,43 +35,49 @@ fn vertex(@location(0) position: vec3f, @location(1) normal: vec3f) -> VertexOut
 @fragment
 fn fragment(@location(0) normal: vec3f, @location(1) positionWS: vec3f) -> @location(0) vec4f {
 
-	let albedo = vec3f(0.8, 0.2, 0.2);
+	let albedo = vec3f(1.0, 1.0, 1.0);
 	let metallic = 0.0;
 	let roughness = 0.4;
 
-	let ambient = vec3f(0.03) * albedo;
-	let lightPos = vec3f(10.0, 5.0, 5.0);
-	let lightEmission = vec3f(300.0, 300.0, 300.0);
-	let distance = length(lightPos - positionWS);
-	let attenuation = 1.0 / (distance * distance);
-	let radiance = lightEmission * attenuation;
+	let ambient = vec3f(0.005) * albedo;
 
 	let N = normalize(normal);
-	let L = normalize(lightPos - positionWS);
 	let V = normalize(uniforms.cameraPos - positionWS);
-	let H = normalize(L + V);
-
-	let NdotL = max(dot(N, L), 0.0);
 	let NdotV = max(dot(N, V), 0.0);
-	let NdotH = max(dot(N, H), 0.0);
-	let VdotH = max(dot(V, H), 0.0);
-	let LdotH = max(dot(L, H), 0.0);
 
 	var F0 = vec3f(0.04);
 	F0 = mix(F0, albedo, metallic);
 
-	let D = D_GGX(NdotH, roughness);
-	let VSmith = V_SmithCorrelated(NdotV, NdotL, roughness);
-	let F = F_Schlick_vec3f(VdotH, F0);
+	var totalRadiance = vec3f(0);
 
-	let fr = D * VSmith * F;
-	let kd = vec3f(1.0) - F;
-	let surface = (1.0 - metallic) * albedo;
-	let fd = surface * disneyDiffuse(NdotL, NdotV, LdotH, roughness) * kd;
+	for (var i = 0u; i < uniforms.lightCount; i++) {
+		let light = uniforms.lights[i];
 
-	let Lo = (fd + fr) * radiance * NdotL;
-	var color = Lo + ambient;
+		let distance = length(light.position - positionWS);
+		let attenuation = 1.0 / (distance * distance);
+		let radiance = light.emission * attenuation;
 
+		let L = normalize(light.position - positionWS);
+		let H = normalize(L + V);
+
+		let NdotL = max(dot(N, L), 0.0);
+		let NdotH = max(dot(N, H), 0.0);
+		let VdotH = max(dot(V, H), 0.0);
+		let LdotH = max(dot(L, H), 0.0);
+
+		let D = D_GGX(NdotH, roughness);
+		let VSmith = V_SmithCorrelated(NdotV, NdotL, roughness);
+		let F = F_Schlick_vec3f(VdotH, F0);
+
+		let fr = D * VSmith * F;
+		let kd = vec3f(1.0) - F;
+		let surface = (1.0 - metallic) * albedo;
+		let fd = surface * disneyDiffuse(NdotL, NdotV, LdotH, roughness) * kd;
+		let Lo = (fd + fr) * radiance * NdotL;
+		totalRadiance += Lo;
+	}
+
+	var color = totalRadiance + ambient;
 	color = color / (color + vec3f(1.0));
 	color = pow(color, vec3f(1.0 / 2.2));
 
