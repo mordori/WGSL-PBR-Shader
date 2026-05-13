@@ -201,7 +201,7 @@ async function initWebGPU() {
 		});
 		device!.queue.writeBuffer(uniformBuffer, 0, uniforms.arrayBuffer);
 
-		renderPassDescriptor.colorAttachments[0]!.view = context.getCurrentTexture().createView();
+		(renderPassDescriptor.colorAttachments as any)[0]!.view = context.getCurrentTexture().createView();
 		renderPassDescriptor.depthStencilAttachment!.view = depthTexture.createView();
 
 		const vertexCount = meshData.length / 6;
