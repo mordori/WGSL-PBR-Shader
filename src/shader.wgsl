@@ -1,5 +1,7 @@
 struct Uniforms {
 	lights: array<PointLight, 4>,
+	dirLight: PointLight,
+	dirLight_mvp: mat4x4f,
 	mvp: mat4x4f,
 	model: mat4x4f,
 	cameraPos: vec3f,
@@ -12,28 +14,37 @@ struct PointLight {
 	emission: vec3f,
 };
 
-@group(0) @binding(0)
-var<uniform> uniforms: Uniforms;
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var shadowMap: texture_depth_2d;
+@group(0) @binding(2) var shadowSampler: sampler_comparison;
 
 struct VertexOutput {
-	@builtin(position) position: vec4f,
-	@location(0) normalWS: vec3f,
+	@builtin(position) Position: vec4f,
+	@location(0) shadowCoords: vec3f,
 	@location(1) positionWS: vec3f,
+	@location(2) normalWS: vec3f,
 };
 
 const PI: f32 = 3.14159265359;
 
 @vertex
-fn vertex(@location(0) position: vec3f, @location(1) normal: vec3f) -> VertexOutput {
+fn vertex_shadow(@location(0) positionOS: vec3f) -> @builtin(position) vec4f {
+	return uniforms.dirLight_mvp * vec4f(positionOS, 1.0);
+}
+
+@vertex
+fn vertex(@location(0) positionOS: vec3f, @location(1) normalOS: vec3f) -> VertexOutput {
 	var out: VertexOutput;
-	out.position = uniforms.mvp * vec4f(position, 1.0);
-	out.normalWS = (uniforms.model * vec4f(normal, 0.0)).xyz;
-	out.positionWS = (uniforms.model * vec4f(position, 1.0)).xyz;
+	let posFromLight = uniforms.dirLight_mvp * vec4f(positionOS, 1.0);
+	out.shadowCoords = vec3f(posFromLight.xy * vec2f(0.5, -0.5) + vec2f(0.5), posFromLight.z);
+	out.Position = uniforms.mvp * vec4f(positionOS, 1.0);
+	out.positionWS = (uniforms.model * vec4f(positionOS, 1.0)).xyz;
+	out.normalWS = (uniforms.model * vec4f(normalOS, 0.0)).xyz;
 	return out;
 }
 
 @fragment
-fn fragment(@location(0) normal: vec3f, @location(1) positionWS: vec3f) -> @location(0) vec4f {
+fn fragment(in: VertexOutput) -> @location(0) vec4f {
 
 	let albedo = vec3f(1.0, 1.0, 1.0);
 	let metallic = 0.0;
@@ -41,47 +52,64 @@ fn fragment(@location(0) normal: vec3f, @location(1) positionWS: vec3f) -> @loca
 
 	let ambient = vec3f(0.005) * albedo;
 
-	let N = normalize(normal);
-	let V = normalize(uniforms.cameraPos - positionWS);
+	let N = normalize(in.normalWS);
+	let V = normalize(uniforms.cameraPos - in.positionWS);
 	let NdotV = max(dot(N, V), 0.0);
 
 	var F0 = vec3f(0.04);
 	F0 = mix(F0, albedo, metallic);
+	let surface = (1.0 - metallic) * albedo;
 
-	var totalRadiance = vec3f(0);
+	let texelSize = 1.0 / vec2f(textureDimensions(shadowMap));
+	var shadowFactor = 0.0;
+	let lightDir = normalize(uniforms.dirLight.position - in.positionWS);
+	let bias = max(0.002 * (1.0 - dot(N, lightDir)), 0.0005);
+	for (var y = -1; y <= 1; y++) {
+		for (var x = -1; x <= 1; x++) {
+			let offset = vec2f(f32(x), f32(y)) * texelSize;
 
+			shadowFactor += textureSampleCompare(
+				shadowMap,
+				shadowSampler,
+				in.shadowCoords.xy + offset,
+				in.shadowCoords.z - bias
+			);
+		}
+	}
+	shadowFactor /= 9.0;
+
+	var radiance = calculateLight(uniforms.dirLight, in.positionWS, N, V, NdotV, roughness, F0, surface) * shadowFactor;
 	for (var i = 0u; i < uniforms.lightCount; i++) {
-		let light = uniforms.lights[i];
-
-		let distance = length(light.position - positionWS);
-		let attenuation = 1.0 / (distance * distance);
-		let radiance = light.emission * attenuation;
-
-		let L = normalize(light.position - positionWS);
-		let H = normalize(L + V);
-
-		let NdotL = max(dot(N, L), 0.0);
-		let NdotH = max(dot(N, H), 0.0);
-		let VdotH = max(dot(V, H), 0.0);
-		let LdotH = max(dot(L, H), 0.0);
-
-		let D = D_GGX(NdotH, roughness);
-		let VSmith = V_SmithCorrelated(NdotV, NdotL, roughness);
-		let F = F_Schlick_vec3f(VdotH, F0);
-
-		let fr = D * VSmith * F;
-		let kd = vec3f(1.0) - F;
-		let surface = (1.0 - metallic) * albedo;
-		let fd = surface * disneyDiffuse(NdotL, NdotV, LdotH, roughness) * kd;
-		let Lo = (fd + fr) * radiance * NdotL;
-		totalRadiance += Lo;
+		radiance += calculateLight(uniforms.lights[i], in.positionWS, N, V, NdotV, roughness, F0, surface);
 	}
 
-	var color = totalRadiance + ambient;
+	var color = radiance + ambient;
 	color = color / (color + vec3f(1.0));
 	color = pow(color, vec3f(1.0 / 2.2));
-
 	return vec4f(color, 1.0);
+}
+
+fn calculateLight(light: PointLight, positionWS: vec3f, N: vec3f, V: vec3f, NdotV: f32, roughness: f32, F0: vec3f, surface: vec3f) -> vec3f {
+	let distance = length(light.position - positionWS);
+	let attenuation = 1.0 / (distance * distance);
+	let radiance = light.emission * attenuation;
+
+	let L = normalize(light.position - positionWS);
+	let H = normalize(L + V);
+
+	let NdotL = max(dot(N, L), 0.0);
+	let NdotH = max(dot(N, H), 0.0);
+	let VdotH = max(dot(V, H), 0.0);
+	let LdotH = max(dot(L, H), 0.0);
+
+	let D = D_GGX(NdotH, roughness);
+	let VSmith = V_SmithCorrelated(NdotV, NdotL, roughness);
+	let F = F_Schlick_vec3f(VdotH, F0);
+
+	let fr = D * VSmith * F;
+	let kd = vec3f(1.0) - F;
+	let fd = surface * disneyDiffuse(NdotL, NdotV, LdotH, roughness) * kd;
+	return (fd + fr) * radiance * NdotL;
 }
 
 fn D_GGX(NdotH: f32, roughness: f32) -> f32 {
