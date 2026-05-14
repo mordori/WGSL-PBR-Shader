@@ -17,7 +17,7 @@ async function initWebGPU() {
 	const device = await adapter?.requestDevice();
 	if (!device || !canvas) throw new Error("WebGPU not supported!");
 
-	const shadowDepthTextureSize = 512;
+	const shadowDepthTextureSize = 1024;
 	const maxLights = 4;
 
 	const context = canvas.getContext('webgpu') as GPUCanvasContext;

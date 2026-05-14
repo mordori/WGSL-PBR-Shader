@@ -77,44 +77,43 @@ fn calculateShadow(lightPos: vec3f, positionWS: vec3f, N: vec3f, positionSS: vec
 
 	var shadowFactor = 0.0;
 
-	if (NdotL_dir > 0.0) {
-		let slope = 1.0 - NdotL_dir;
-		let normalBias = 0.005 + (0.015 * slope);
-		let biasedPos = positionWS + N * normalBias;
-		let biasedLightToFrag = biasedPos - lightPos;
+	let slope = 1.0 - NdotL_dir;
+	let normalBias = 0.005 + (0.015 * slope);
+	let biasedPos = positionWS + N * normalBias;
+	let biasedLightToFrag = biasedPos - lightPos;
 
-		var dist = max(max(abs(biasedLightToFrag.x), abs(biasedLightToFrag.y)), abs(biasedLightToFrag.z));
-		let near = 0.1;
-		let far = 15.0;
-		let expectedDepth = (far / (far - near)) * (1.0 - near / dist);
+	var dist = max(max(abs(biasedLightToFrag.x), abs(biasedLightToFrag.y)), abs(biasedLightToFrag.z));
+	let near = 0.1;
+	let far = 15.0;
+	let expectedDepth = (far / (far - near)) * (1.0 - near / dist);
 
-		let offsets = array<vec3f, 20>(
-			vec3f( 0.0,  0.0,  0.0), vec3f( 0.5,  0.5,  0.5), vec3f(-0.5, -0.5, -0.5),
-			vec3f(-0.5,  0.5,  0.5), vec3f( 0.5, -0.5, -0.5), vec3f( 0.5,  0.5, -0.5),
-			vec3f(-0.5, -0.5,  0.5), vec3f( 0.5, -0.5,  0.5), vec3f(-0.5,  0.5, -0.5),
-			vec3f( 0.8,  0.0,  0.0), vec3f(-0.8,  0.0,  0.0), vec3f( 0.0,  0.8,  0.0),
-			vec3f( 0.0, -0.8,  0.0), vec3f( 0.0,  0.0,  0.8), vec3f( 0.0,  0.0, -0.8),
-			vec3f( 0.0,  0.4,  0.4), vec3f( 0.0, -0.4, -0.4), vec3f( 0.4,  0.0,  0.4),
-			vec3f(-0.4,  0.0, -0.4), vec3f( 0.4,  0.4,  0.0)
+	let offsets = array<vec3f, 20>(
+		vec3f( 0.0,  0.0,  0.0), vec3f( 0.5,  0.5,  0.5), vec3f(-0.5, -0.5, -0.5),
+		vec3f(-0.5,  0.5,  0.5), vec3f( 0.5, -0.5, -0.5), vec3f( 0.5,  0.5, -0.5),
+		vec3f(-0.5, -0.5,  0.5), vec3f( 0.5, -0.5,  0.5), vec3f(-0.5,  0.5, -0.5),
+		vec3f( 0.8,  0.0,  0.0), vec3f(-0.8,  0.0,  0.0), vec3f( 0.0,  0.8,  0.0),
+		vec3f( 0.0, -0.8,  0.0), vec3f( 0.0,  0.0,  0.8), vec3f( 0.0,  0.0, -0.8),
+		vec3f( 0.0,  0.4,  0.4), vec3f( 0.0, -0.4, -0.4), vec3f( 0.4,  0.0,  0.4),
+		vec3f(-0.4,  0.0, -0.4), vec3f( 0.4,  0.4,  0.0)
+	);
+
+	let diskRadius = 0.005;
+	let val = vec2f(0.06711056, 0.00583715);
+	let noise = fract(52.9829189 * fract(dot(positionSS, val) + f32(lightIndex)));
+	let jitterRadius = diskRadius * (0.8 + 0.4 * noise);
+
+	let sampleDir = -lightDir;
+	for (var j = 0; j < 20; j++){
+		shadowFactor += textureSampleCompare(
+			shadowCube,
+			shadowSampler,
+			normalize(sampleDir + offsets[j] * jitterRadius),
+			lightIndex,
+			expectedDepth
 		);
+	};
+	shadowFactor /= 20.0;
 
-		let diskRadius = 0.005;
-		let val = vec2f(0.06711056, 0.00583715);
-		let noise = fract(52.9829189 * fract(dot(positionSS, val) + f32(lightIndex)));
-		let jitterRadius = diskRadius * (0.8 + 0.4 * noise);
-
-		let sampleDir = -lightDir;
-		for (var j = 0; j < 20; j++){
-			shadowFactor += textureSampleCompare(
-				shadowCube,
-				shadowSampler,
-				normalize(sampleDir + offsets[j] * jitterRadius),
-				lightIndex,
-				expectedDepth
-			);
-		};
-		shadowFactor /= 20.0;
-	}
 	return shadowFactor;
 }
 
