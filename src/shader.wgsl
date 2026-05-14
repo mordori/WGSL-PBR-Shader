@@ -1,7 +1,6 @@
 struct Uniforms {
 	lights: array<PointLight, 4>,
-	dirLight: PointLight,
-	dirLight_mvp: mat4x4f,
+	shadowMatrices: array<mat4x4f, 24>,
 	mvp: mat4x4f,
 	model: mat4x4f,
 	cameraPos: vec3f,
@@ -15,28 +14,25 @@ struct PointLight {
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d;
+@group(0) @binding(1) var shadowCube: texture_depth_cube_array;
 @group(0) @binding(2) var shadowSampler: sampler_comparison;
 
 struct VertexOutput {
 	@builtin(position) Position: vec4f,
-	@location(0) shadowCoords: vec3f,
-	@location(1) positionWS: vec3f,
-	@location(2) normalWS: vec3f,
+	@location(0) positionWS: vec3f,
+	@location(1) normalWS: vec3f,
 };
 
 const PI: f32 = 3.14159265359;
 
 @vertex
-fn vertex_shadow(@location(0) positionOS: vec3f) -> @builtin(position) vec4f {
-	return uniforms.dirLight_mvp * vec4f(positionOS, 1.0);
+fn vertex_shadow(@location(0) positionOS: vec3f, @builtin(instance_index) layerIndex: u32) -> @builtin(position) vec4f {
+	return uniforms.shadowMatrices[layerIndex] * vec4f(positionOS, 1.0);
 }
 
 @vertex
 fn vertex(@location(0) positionOS: vec3f, @location(1) normalOS: vec3f) -> VertexOutput {
 	var out: VertexOutput;
-	let posFromLight = uniforms.dirLight_mvp * vec4f(positionOS, 1.0);
-	out.shadowCoords = vec3f(posFromLight.xy * vec2f(0.5, -0.5) + vec2f(0.5), posFromLight.z);
 	out.Position = uniforms.mvp * vec4f(positionOS, 1.0);
 	out.positionWS = (uniforms.model * vec4f(positionOS, 1.0)).xyz;
 	out.normalWS = (uniforms.model * vec4f(normalOS, 0.0)).xyz;
@@ -60,33 +56,66 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
 	F0 = mix(F0, albedo, metallic);
 	let surface = (1.0 - metallic) * albedo;
 
-	let texelSize = 1.0 / vec2f(textureDimensions(shadowMap));
-	var shadowFactor = 0.0;
-	let lightDir = normalize(uniforms.dirLight.position - in.positionWS);
-	let bias = max(0.002 * (1.0 - dot(N, lightDir)), 0.0005);
-	for (var y = -1; y <= 1; y++) {
-		for (var x = -1; x <= 1; x++) {
-			let offset = vec2f(f32(x), f32(y)) * texelSize;
-
-			shadowFactor += textureSampleCompare(
-				shadowMap,
-				shadowSampler,
-				in.shadowCoords.xy + offset,
-				in.shadowCoords.z - bias
-			);
-		}
-	}
-	shadowFactor /= 9.0;
-
-	var radiance = calculateLight(uniforms.dirLight, in.positionWS, N, V, NdotV, roughness, F0, surface) * shadowFactor;
+	var lighting = vec3f(0.0);
 	for (var i = 0u; i < uniforms.lightCount; i++) {
-		radiance += calculateLight(uniforms.lights[i], in.positionWS, N, V, NdotV, roughness, F0, surface);
+		let light = uniforms.lights[i];
+		let radiance = calculateLight(uniforms.lights[i], in.positionWS, N, V, NdotV, roughness, F0, surface);
+		let shadow = calculateShadow(light.position, in.positionWS, N, in.Position.xy, i32(i));
+		lighting += radiance * shadow;
 	}
 
-	var color = radiance + ambient;
+	var color = lighting + ambient;
 	color = color / (color + vec3f(1.0));
 	color = pow(color, vec3f(1.0 / 2.2));
 	return vec4f(color, 1.0);
+}
+
+fn calculateShadow(lightPos: vec3f, positionWS: vec3f, N: vec3f, positionSS: vec2f, lightIndex: i32) -> f32 {
+	let lightToFrag = positionWS - lightPos;
+	let lightDir = normalize(-lightToFrag);
+	let NdotL_dir = max(dot(N, lightDir), 0.0);
+
+	var shadowFactor = 0.0;
+
+	if (NdotL_dir > 0.0) {
+		let slope = 1.0 - NdotL_dir;
+		let normalBias = 0.005 + (0.015 * slope);
+		let biasedPos = positionWS + N * normalBias;
+		let biasedLightToFrag = biasedPos - lightPos;
+
+		var dist = max(max(abs(biasedLightToFrag.x), abs(biasedLightToFrag.y)), abs(biasedLightToFrag.z));
+		let near = 0.1;
+		let far = 15.0;
+		let expectedDepth = (far / (far - near)) * (1.0 - near / dist);
+
+		let offsets = array<vec3f, 20>(
+			vec3f( 0.0,  0.0,  0.0), vec3f( 0.5,  0.5,  0.5), vec3f(-0.5, -0.5, -0.5),
+			vec3f(-0.5,  0.5,  0.5), vec3f( 0.5, -0.5, -0.5), vec3f( 0.5,  0.5, -0.5),
+			vec3f(-0.5, -0.5,  0.5), vec3f( 0.5, -0.5,  0.5), vec3f(-0.5,  0.5, -0.5),
+			vec3f( 0.8,  0.0,  0.0), vec3f(-0.8,  0.0,  0.0), vec3f( 0.0,  0.8,  0.0),
+			vec3f( 0.0, -0.8,  0.0), vec3f( 0.0,  0.0,  0.8), vec3f( 0.0,  0.0, -0.8),
+			vec3f( 0.0,  0.4,  0.4), vec3f( 0.0, -0.4, -0.4), vec3f( 0.4,  0.0,  0.4),
+			vec3f(-0.4,  0.0, -0.4), vec3f( 0.4,  0.4,  0.0)
+		);
+
+		let diskRadius = 0.005;
+		let val = vec2f(0.06711056, 0.00583715);
+		let noise = fract(52.9829189 * fract(dot(positionSS, val) + f32(lightIndex)));
+		let jitterRadius = diskRadius * (0.8 + 0.4 * noise);
+
+		let sampleDir = -lightDir;
+		for (var j = 0; j < 20; j++){
+			shadowFactor += textureSampleCompare(
+				shadowCube,
+				shadowSampler,
+				normalize(sampleDir + offsets[j] * jitterRadius),
+				lightIndex,
+				expectedDepth
+			);
+		};
+		shadowFactor /= 20.0;
+	}
+	return shadowFactor;
 }
 
 fn calculateLight(light: PointLight, positionWS: vec3f, N: vec3f, V: vec3f, NdotV: f32, roughness: f32, F0: vec3f, surface: vec3f) -> vec3f {

@@ -17,6 +17,9 @@ async function initWebGPU() {
 	const device = await adapter?.requestDevice();
 	if (!device || !canvas) throw new Error("WebGPU not supported!");
 
+	const shadowDepthTextureSize = 512;
+	const maxLights = 4;
+
 	const context = canvas.getContext('webgpu') as GPUCanvasContext;
 	const format = navigator.gpu.getPreferredCanvasFormat();
 	let depthTexture!: GPUTexture;
@@ -54,22 +57,11 @@ async function initWebGPU() {
 	});
 	device.queue.writeBuffer(vertexBuffer, 0, meshData);
 
-	const shadowDepthTextureSize = 1024;
 	const shadowDepthTexture = device.createTexture({
-		size: [shadowDepthTextureSize, shadowDepthTextureSize, 1],
+		size: [shadowDepthTextureSize, shadowDepthTextureSize, 6 * maxLights],
 		usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		format: 'depth32float',
 	});
-
-	const shadowPassDescriptor: GPURenderPassDescriptor = {
-		colorAttachments: [],
-		depthStencilAttachment: {
-			view: shadowDepthTexture.createView(),
-			depthClearValue: 1.0,
-			depthLoadOp: 'clear',
-			depthStoreOp: 'store',
-		},
-	};
 
 	const renderPassDescriptor: GPURenderPassDescriptor = {
 		colorAttachments: [{
@@ -104,7 +96,10 @@ async function initWebGPU() {
 			entryPoint: 'fragment',
 			targets: [{ format }]
 		},
-		primitive: { topology: 'triangle-list' },
+		primitive: {
+			topology: 'triangle-list',
+			cullMode: 'back'
+		},
 		depthStencil: {
 			depthWriteEnabled: true,
 			depthCompare: 'less',
@@ -116,7 +111,7 @@ async function initWebGPU() {
 		layout: renderPipeline.getBindGroupLayout(0),
 		entries: [
 			{ binding: 0, resource: { buffer: uniformBuffer } },
-			{ binding: 1, resource: shadowDepthTexture.createView() },
+			{ binding: 1, resource: shadowDepthTexture.createView({ dimension: 'cube-array' }) },
 			{
 				binding: 2, resource: device.createSampler({
 					compare: 'less',
@@ -139,11 +134,15 @@ async function initWebGPU() {
 				]
 			}]
 		},
-		primitive: { topology: 'triangle-list' },
+		primitive: {
+			topology: 'triangle-list',
+		},
 		depthStencil: {
 			depthWriteEnabled: true,
 			depthCompare: 'less',
 			format: 'depth32float',
+			depthBias: 2,
+			depthBiasSlopeScale: 2,
 		}
 	});
 
@@ -162,41 +161,60 @@ async function initWebGPU() {
 		lastTime = now;
 		time += deltaTime;
 		const aspect = canvas.width / canvas.height;
+		const near = 0.1;
+		const far = 50.0;
 
 		const cameraPos = [0.0, 0.0, 5.0];
-		const projection = mat4.perspective(Math.PI / 4.0, aspect, 0.1, 100.0);
+		const projection = mat4.perspective(Math.PI / 4.0, aspect, near, far);
 		const view = mat4.lookAt(cameraPos, origin, up);
-		const model = mat4.rotationY(time);
+		const model = mat4.rotationY(time / 5.0);
 		const mvp = mat4.mul(mat4.mul(projection, view), model);
 
-		// const dirLight = { position: [1.0, 6.0, -10.0], emission: [400.0, 400.0, 5500.0] };
-		const dirLight = { position: [3.0, 1.0, 5.0], emission: [10.0, 10.0, 5000.0] };
-		const dirLightView = mat4.lookAt(dirLight.position, origin, up);
-		const dirLightProjection = mat4.create();
-		{
-			const left = -2;
-			const right = 2;
-			const bottom = -2;
-			const top = 2;
-			const near = 0.1;
-			const far = 50.0;
-			mat4.ortho(left, right, bottom, top, near, far, dirLightProjection);
-		}
-		const dirLight_mvp = mat4.mul(mat4.mul(dirLightProjection, dirLightView), model);
-
-		const lights = [
-			// { position: [2.0, 4.0, 5.0], emission: [10.0, 10.0, 5000.0] },
+		const activeLights = [
+			{ position: [0.6, 1.7, -2.0], emission: [1000.0, 1000.0, 1000.0] },
+			{ position: [2.0, 3.0, 5.0], emission: [10.0, 10.0, 5000.0] },
 			{ position: [-7.0, 2.0, -8.0], emission: [250.0, 0.0, 0.0] },
 		]
 
+		const lights: any[] = [];
+		for (let i = 0; i < maxLights; i++) {
+			lights.push(activeLights[i] || activeLights[0]);
+		}
+
+		const shadowNear = 0.1;
+		const shadowFar = 15.0;
+		const shadowProjection = mat4.perspective(Math.PI / 2.0, 1.0, shadowNear, shadowFar);
+		shadowProjection[5] *= -1;
+		const faceDirections = [
+			{ t: [1, 0, 0], u: [0, -1, 0] },
+			{ t: [-1, 0, 0], u: [0, -1, 0] },
+			{ t: [0, 1, 0], u: [0, 0, 1] },
+			{ t: [0, -1, 0], u: [0, 0, -1] },
+			{ t: [0, 0, 1], u: [0, -1, 0] },
+			{ t: [0, 0, -1], u: [0, -1, 0] },
+		];
+
+		const shadowMatrices: any[] = [];
+		for (let i = 0; i < maxLights; i++) {
+			const light = lights[i];
+			faceDirections.forEach(face => {
+				const target = [
+					light.position[0] + face.t[0],
+					light.position[1] + face.t[1],
+					light.position[2] + face.t[2]
+				];
+				const view = mat4.lookAt(light.position, target, face.u);
+				shadowMatrices.push(mat4.mul(mat4.mul(shadowProjection, view), model));
+			});
+		}
+
 		uniforms.set({
 			lights,
-			dirLight,
-			dirLight_mvp,
+			shadowMatrices,
 			mvp,
 			model,
 			cameraPos,
-			lightCount: lights.length,
+			lightCount: activeLights.length,
 			time,
 		});
 		device!.queue.writeBuffer(uniformBuffer, 0, uniforms.arrayBuffer);
@@ -207,12 +225,29 @@ async function initWebGPU() {
 		const vertexCount = meshData.length / 6;
 		const commandEncoder = device!.createCommandEncoder();
 		{
-			const shadowPass = commandEncoder.beginRenderPass(shadowPassDescriptor);
-			shadowPass.setPipeline(shadowPipeline);
-			shadowPass.setBindGroup(0, shadowBindGroup);
-			shadowPass.setVertexBuffer(0, vertexBuffer);
-			shadowPass.draw(vertexCount);
-			shadowPass.end();
+			for (let i = 0; i < activeLights.length; i++) {
+				for (let j = 0; j < 6; j++) {
+					const layer = i * 6 + j;
+					const shadowPass = commandEncoder.beginRenderPass({
+						colorAttachments: [],
+						depthStencilAttachment: {
+							view: shadowDepthTexture.createView({
+								dimension: '2d',
+								baseArrayLayer: layer,
+								arrayLayerCount: 1,
+							}),
+							depthClearValue: 1.0,
+							depthLoadOp: 'clear',
+							depthStoreOp: 'store',
+						},
+					});
+					shadowPass.setPipeline(shadowPipeline);
+					shadowPass.setBindGroup(0, shadowBindGroup);
+					shadowPass.setVertexBuffer(0, vertexBuffer);
+					shadowPass.draw(vertexCount, 1, 0, layer);
+					shadowPass.end();
+				}
+			}
 		}
 		{
 			const renderPass = commandEncoder.beginRenderPass(renderPassDescriptor);
