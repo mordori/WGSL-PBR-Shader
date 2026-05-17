@@ -23,6 +23,7 @@ async function initWebGPU() {
 	const context = canvas.getContext('webgpu') as GPUCanvasContext;
 	const format = navigator.gpu.getPreferredCanvasFormat();
 	let depthTexture!: GPUTexture;
+	let depthView!: GPUTextureView;
 	const resize = () => {
 		canvas.width = window.innerWidth * window.devicePixelRatio;
 		canvas.height = window.innerHeight * window.devicePixelRatio;
@@ -34,6 +35,7 @@ async function initWebGPU() {
 			format: 'depth24plus',
 			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		});
+		depthView = depthTexture.createView();
 	};
 	window.addEventListener('resize', resize);
 	resize();
@@ -151,6 +153,15 @@ async function initWebGPU() {
 		entries: [{ binding: 0, resource: { buffer: uniformBuffer } }]
 	});
 
+	const shadowLayerViews: GPUTextureView[] = [];
+	for (let i = 0; i < maxLights * 6; i++) {
+		shadowLayerViews.push(shadowDepthTexture.createView({
+			dimension: '2d',
+			baseArrayLayer: i,
+			arrayLayerCount: 1,
+		}));
+	}
+
 	const origin = [0.0, 0.0, 0.0];
 	const up = [0.0, 1.0, 0.0];
 	let time = 0.0;
@@ -220,7 +231,7 @@ async function initWebGPU() {
 		device!.queue.writeBuffer(uniformBuffer, 0, uniforms.arrayBuffer);
 
 		(renderPassDescriptor.colorAttachments as any)[0]!.view = context.getCurrentTexture().createView();
-		renderPassDescriptor.depthStencilAttachment!.view = depthTexture.createView();
+		renderPassDescriptor.depthStencilAttachment!.view = depthView;
 
 		const vertexCount = meshData.length / 6;
 		const commandEncoder = device!.createCommandEncoder();
@@ -231,11 +242,7 @@ async function initWebGPU() {
 					const shadowPass = commandEncoder.beginRenderPass({
 						colorAttachments: [],
 						depthStencilAttachment: {
-							view: shadowDepthTexture.createView({
-								dimension: '2d',
-								baseArrayLayer: layer,
-								arrayLayerCount: 1,
-							}),
+							view: shadowLayerViews[layer],
 							depthClearValue: 1.0,
 							depthLoadOp: 'clear',
 							depthStoreOp: 'store',
