@@ -143,8 +143,8 @@ async function initWebGPU() {
 			depthWriteEnabled: true,
 			depthCompare: 'less',
 			format: 'depth32float',
-			depthBias: 2,
-			depthBiasSlopeScale: 2,
+			// depthBias: 1,
+			// depthBiasSlopeScale: 1.0,
 		}
 	});
 
