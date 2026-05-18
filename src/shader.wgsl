@@ -97,7 +97,7 @@ fn calculateShadow(lightPos: vec3f, positionWS: vec3f, N: vec3f, positionSS: vec
 
 	// Dynamic normal bias
 	let slope = 1.0 - NdotL_dir;
-	let normalBias = 0.02 + (0.02 * slope);
+	let normalBias = 0.025 + (0.02 * slope);
 	let biasedPos = positionWS + N * normalBias;
 	let biasedLightToFrag = biasedPos - lightPos;
 	let sampleDir = normalize(biasedLightToFrag);
@@ -136,8 +136,9 @@ fn calculateShadow(lightPos: vec3f, positionWS: vec3f, N: vec3f, positionSS: vec
 		);
 	};
 	shadowFactor /= 20.0;
-	let terminatorFade = smoothstep(0.0, 0.25, NdotL_dir);
-	return shadowFactor * terminatorFade;
+	// let terminatorFade = smoothstep(0.0, 0.25, NdotL_dir);
+	// return shadowFactor * terminatorFade;
+	return shadowFactor;
 }
 
 fn calculateLight(light: PointLight, params: Surface) -> vec3f {
@@ -169,14 +170,14 @@ fn D_GGX(NdotH: f32, roughness: f32) -> f32 {
 	let NdotH2 = NdotH * NdotH;
 
 	let denom = (NdotH2 * (a2 - 1.0) + 1.0);
-	return a2 / (PI * denom * denom);
+	return a2 / (PI * denom * denom + 0.00001);
 }
 
 fn V_SmithCorrelated(NdotV: f32, NdotL: f32, roughness: f32) -> f32 {
 	let a = roughness * roughness;
 	let GGXV = NdotL * (NdotV * (1.0 - a) + a);
 	let GGXL = NdotV * (NdotL * (1.0 - a) + a);
-	return 0.5 / (GGXV + GGXL);
+	return 0.5 / (GGXV + GGXL + 0.00001);
 }
 
 fn F_Schlick_vec3f(u: f32, F0: vec3f) -> vec3f {
